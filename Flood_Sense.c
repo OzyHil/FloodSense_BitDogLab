@@ -25,6 +25,15 @@
 #define LED_GREEN_PIN 11              // GPIO11 - LED verde
 #define LED_RED_PIN 13                // GPIO13 - LED vermelho
 
+volatile uint8_t alert_threshold_A = 80;
+volatile uint8_t attention_threshold_A = 60;
+
+volatile uint8_t alert_threshold_B = 75;
+volatile uint8_t attention_threshold_B = 95;
+
+volatile uint8_t current_level_A = 15;
+volatile uint8_t current_level_B = 25;
+
 // Inicializar os Pinos GPIO para acionamento dos LEDs da BitDogLab
 void gpio_led_bitdog(void);
 
@@ -40,9 +49,22 @@ float temp_read(void);
 // Tratamento do request do usuário
 void user_request(char **request);
 
-// Função principal
+// Trecho para modo BOOTSEL com botão B
+#include "pico/bootrom.h"
+#define botaoB 6
+void gpio_irq_handler(uint gpio, uint32_t events)
+{
+    reset_usb_boot(0, 0);
+}
+
 int main()
 {
+    // Para ser utilizado o modo BOOTSEL com botão B
+    gpio_init(botaoB);
+    gpio_set_dir(botaoB, GPIO_IN);
+    gpio_pull_up(botaoB);
+    gpio_set_irq_enabled_with_callback(botaoB, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+
     // Inicializa todos os tipos de bibliotecas stdio padrão presentes que estão ligados ao binário.
     stdio_init_all();
 
@@ -147,55 +169,38 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
     return ERR_OK;
 }
 
-// Tratamento do request do usuário - digite aqui
+// Tratamento do request do usuário
 void user_request(char **request)
 {
+    char *body = strstr(*request, "\r\n\r\n");
+    if (body != NULL)
+    {
+        body += 4; // Pula os \r\n\r\n
 
-    if (strstr(*request, "GET /blue_on") != NULL)
-    {
-        gpio_put(LED_BLUE_PIN, 1);
-    }
-    else if (strstr(*request, "GET /blue_off") != NULL)
-    {
-        gpio_put(LED_BLUE_PIN, 0);
-    }
-    else if (strstr(*request, "GET /green_on") != NULL)
-    {
-        gpio_put(LED_GREEN_PIN, 1);
-    }
-    else if (strstr(*request, "GET /green_off") != NULL)
-    {
-        gpio_put(LED_GREEN_PIN, 0);
-    }
-    else if (strstr(*request, "GET /red_on") != NULL)
-    {
-        gpio_put(LED_RED_PIN, 1);
-    }
-    else if (strstr(*request, "GET /red_off") != NULL)
-    {
-        gpio_put(LED_RED_PIN, 0);
-    }
-    else if (strstr(*request, "GET /on") != NULL)
-    {
-        cyw43_arch_gpio_put(LED_PIN, 1);
-    }
-    else if (strstr(*request, "GET /off") != NULL)
-    {
-        cyw43_arch_gpio_put(LED_PIN, 0);
+        char regiao;
+        int alerta, atencao;
+
+        // Extrai os dados do corpo
+        if (sscanf(body, "regiao=%c&limiteAlerta=%d&limiteAtencao=%d", &regiao, &alerta, &atencao) == 3)
+        {
+            if (regiao == 'A')
+            {
+                alert_threshold_A = alerta;
+                attention_threshold_A = atencao;
+            }
+            else if (regiao == 'B')
+            {
+                alert_threshold_B = alerta;
+                attention_threshold_B = atencao;
+            }
+        }
+        else
+        {
+            printf("Erro ao interpretar o corpo do POST.\n");
+        }
     }
 };
 
-// Leitura da temperatura interna
-float temp_read(void)
-{
-    adc_select_input(4);
-    uint16_t raw_value = adc_read();
-    const float conversion_factor = 3.3f / (1 << 12);
-    float temperature = 27.0f - ((raw_value * conversion_factor) - 0.706f) / 0.001721f;
-    return temperature;
-}
-
-// Função de callback para processar requisições HTTP
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
     if (!p)
@@ -205,7 +210,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
         return ERR_OK;
     }
 
-    // Alocação do request na memória dinámica
+    // Alocação do request na memória dinâmica
     char *request = (char *)malloc(p->len + 1);
     memcpy(request, p->payload, p->len);
     request[p->len] = '\0';
@@ -215,48 +220,63 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     // Tratamento de request - Controle dos LEDs
     user_request(&request);
 
-    // Leitura da temperatura interna
-    float temperature = temp_read();
-
     // Cria a resposta HTML
     char html[2048];
 
-    // Instruções html do webserver
+    // Cria a resposta HTML em partes
     snprintf(html, sizeof(html),
-             "HTTP/1.1 200 OK\r\n"
-             "Content-Type: text/html\r\n"
-             "Connection: close\r\n"
-             "\r\n"
-             "<!DOCTYPE html>"
-             "<html>"
+             "<!DOCTYPE html><html>"
              "<head>"
              "<meta charset='UTF-8'>"
+             "<meta name='viewport'content='width=device-width,initial-scale=1.0'>"
              "<title>FloodSense</title>"
              "<style>"
-             "body { font-family: Arial; background-color: #f0f0f0; text-align: center; padding: 30px;}"
-             ".box {margin: 15px; background: white; padding: 20px; border-radius: 10px; display: inline-block; box-shadow: 0 0 10px rgba(0,0,0,0.1); }"
-             ".value { font-size: 30px; color: #1976d2; font-weight: bold; }"
+             "body{font-family:sans-serif;background:#f0f0f0;padding:20px;text-align:center;}"
+             ".b{margin:10px auto;background:#fff;padding:30px;border-radius:10px;box-shadow:0 0 5px #ccc;font-weight:bold;max-width:300px;}"
+             ".bk{display:inline-block;margin-left:10px;margin-right:10px;}"
+             ".value{color:#1976d2;}"
+             ".status{padding:4px 8px;border-radius:4px;display:inline-block;}"
+             ".alerta{background:#e53935;color:#fff;}"
+             ".normal{background:#43a047;color:#fff;}"
+             ".atencao{background:#fb8c00;color:#fff;}"
+             "button,input,select{padding:6px;margin:4px;border-radius:5px;border:1px solid #838282;font-size:14px;}"
+             "table{margin:0 auto;border-collapse:collapse;}"
+             "th,td{padding:4px 8px;border:1px solid #ccc;}"
              "</style>"
              "</head>"
              "<body>"
-             "<div class='box'>"
-             "<h1>Região A</h1>"
-             "<p class='value'>Nivel da Agua: 85%%</p>"
-             "<p>Status: Alerta!</p>"
+             "<h1>FloodSense Monitor</h1>"
+             "<div class='b bk'><h2>Região A</h2><p class='value'>Nível: %dm</p><p class='status alerta'>Alerta</p></div>"
+             "<div class='b bk'><h2>Região B</h2><p class='value'>Nível: %dm</p><p class='status normal'>Normal</p></div>"
+             "<div class='b'>"
+             "<h2>Limiares Salvos</h2>"
+             "<table>"
+             "<tr><th>Região</th><th>Alerta (m)</th><th>Atenção (m)</th></tr>"
+             "<tr><td>A</td><td>%d</td><td>%d</td></tr>"
+             "<tr><td>B</td><td>%d</td><td>%d</td></tr>"
+             "</table>"
              "</div>"
-              "<div class='box'>"
-             "<h1>Região B</h1>"
-             "<p class='value'>Nivel da Agua: 25%%</p>"
-             "<p>Status: Alerta!</p>"
-             "</div>"
-              "<div class='box'>"
-             "<h1>Região C</h1>"
-             "<p class='value'>Nivel da Agua: 45%%</p>"
-             "<p>Status: Alerta!</p>"
+             "<div class='b bk'>"
+             "<h2>Alterar Limiares</h2>"
+             "<form method='POST' action='/'>"
+             "<select name='regiao'>"
+             "<option value=''>Região</option>"
+             "<option value='A'>A</option>"
+             "<option value='B'>B</option>"
+             "</select><br>"
+             "<input type='number' name='limiteAlerta' placeholder='Alerta' min='0' max='100'><br>"
+             "<input type='number' name='limiteAtencao' placeholder='Atenção' min='0' max='100'><br>"
+             "<button type='submit'>Alterar</button>"
+             "</form>"
              "</div>"
              "</body>"
-             "</html>"
-            );
+             "</html>",
+             current_level_A,
+             current_level_B,
+             alert_threshold_A,
+             attention_threshold_A,
+             alert_threshold_B,
+             attention_threshold_B);
 
     // Escreve dados para envio (mas não os envia imediatamente).
     tcp_write(tpcb, html, strlen(html), TCP_WRITE_FLAG_COPY);
