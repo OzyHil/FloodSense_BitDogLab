@@ -3,36 +3,25 @@
   https://www.raspberrypi.com/documentation/pico-sdk/networking.html#group_pico_cyw43_arch_1ga33cca1c95fc0d7512e7fef4a59fd7475
  */
 
-#include <stdio.h>  // Biblioteca padrão para entrada e saída
-#include <string.h> // Biblioteca manipular strings
-#include <stdlib.h> // funções para realizar várias operações, incluindo alocação de memória dinâmica (malloc)
-
-#include "pico/stdlib.h"     // Biblioteca da Raspberry Pi Pico para funções padrão (GPIO, temporização, etc.)
-#include "hardware/adc.h"    // Biblioteca da Raspberry Pi Pico para manipulação do conversor ADC
-#include "pico/cyw43_arch.h" // Biblioteca para arquitetura Wi-Fi da Pico com CYW43
-
-#include "lwip/pbuf.h"  // Lightweight IP stack - manipulação de buffers de pacotes de rede
-#include "lwip/tcp.h"   // Lightweight IP stack - fornece funções e estruturas para trabalhar com o protocolo TCP
-#include "lwip/netif.h" // Lightweight IP stack - fornece funções e estruturas para trabalhar com interfaces de rede (netif)
+#include "General.h"    // Biblioteca geral do sistema
+#include "Led.h"        // Biblioteca geral do sistema
+#include "Buzzer.h"     // Biblioteca do buzzer
+#include "Button.h"     // Biblioteca do botão
+#include "Led_Matrix.h" // Biblioteca para controle da matriz de LEDs
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
 #define WIFI_SSID "TSUNAMI_EVERALDO" // Nome da rede Wi-Fi
 #define WIFI_PASSWORD "amizade5560"  // Senha da rede Wi-Fi
 
-// Definição dos pinos dos LEDs
-#define LED_PIN CYW43_WL_GPIO_LED_PIN // GPIO do CI CYW43
-#define LED_BLUE_PIN 12               // GPIO12 - LED azul
-#define LED_GREEN_PIN 11              // GPIO11 - LED verde
-#define LED_RED_PIN 13                // GPIO13 - LED vermelho
+volatile bool is_region_A = true;
 
-volatile uint8_t alert_threshold_A = 80;
-volatile uint8_t attention_threshold_A = 60;
+volatile uint8_t alert_threshold_A = 12;
+volatile uint8_t attention_threshold_A = 9;
+volatile uint8_t current_level_A = 11;
 
-volatile uint8_t alert_threshold_B = 75;
-volatile uint8_t attention_threshold_B = 95;
-
-volatile uint8_t current_level_A = 15;
-volatile uint8_t current_level_B = 25;
+volatile uint8_t alert_threshold_B = 7;
+volatile uint8_t attention_threshold_B = 5;
+volatile uint8_t current_level_B = 4;
 
 // Inicializar os Pinos GPIO para acionamento dos LEDs da BitDogLab
 void gpio_led_bitdog(void);
@@ -51,25 +40,82 @@ void user_request(char **request);
 
 // Trecho para modo BOOTSEL com botão B
 #include "pico/bootrom.h"
-#define botaoB 6
+
+uint32_t last_time_button_J = 0; // Tempo do último pressionamento
+uint32_t last_time_button_A = 0; // Tempo do último pressionamento
+uint32_t last_time_button_B = 0; // Tempo do último pressionamento
+
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
-    reset_usb_boot(0, 0);
+    uint32_t now = get_absolute_time();
+
+    if (gpio == BUTTON_J)
+    {
+        if ((now - last_time_button_J) >= DEBOUNCE_DELAY)
+        {
+            is_region_A = !is_region_A;
+            printf("Região ativa: %s\n", is_region_A ? "A" : "B");
+            last_time_button_J = now;
+        }
+    }
+
+    else if (gpio == BUTTON_A)
+    {
+        if ((now - last_time_button_A) >= DEBOUNCE_DELAY)
+        {
+            if (is_region_A)
+            {
+                current_level_A++;
+                printf("Nível A: %d\n", current_level_A);
+            }
+            else
+            {
+                current_level_B++;
+                printf("Nível B: %d\n", current_level_B);
+            }
+            last_time_button_A = now;
+        }
+    }
+
+    else if (gpio == BUTTON_B)
+    {
+        if ((now - last_time_button_B) >= DEBOUNCE_DELAY)
+        {
+            if (is_region_A)
+            {
+                if (current_level_A > 0)
+                {
+                    current_level_A--;
+                }
+                printf("Nível A: %d\n", current_level_A);
+            }
+            else
+            {
+                if (current_level_B > 0)
+                {
+                    current_level_B--;
+                }
+                printf("Nível B: %d\n", current_level_B);
+            }
+            last_time_button_B = now;
+        }
+    }
 }
 
 int main()
 {
-    // Para ser utilizado o modo BOOTSEL com botão B
-    gpio_init(botaoB);
-    gpio_set_dir(botaoB, GPIO_IN);
-    gpio_pull_up(botaoB);
-    gpio_set_irq_enabled_with_callback(botaoB, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+    configure_button(BUTTON_J); // Configura o botão J
+    configure_button(BUTTON_A); // Configura o botão A
+    configure_button(BUTTON_B); // Configura o botão B
+    gpio_set_irq_enabled_with_callback(BUTTON_J, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+    gpio_set_irq_enabled_with_callback(BUTTON_A, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
+    gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
 
-    // Inicializa todos os tipos de bibliotecas stdio padrão presentes que estão ligados ao binário.
-    stdio_init_all();
+    init_system_config(); // Inicializa a configuração do sistema
 
-    // Inicializar os Pinos GPIO para acionamento dos LEDs da BitDogLab
-    gpio_led_bitdog();
+    configure_leds();        // Configura os LEDs
+    configure_buzzer();      // Configura o buzzer
+    configure_leds_matrix(); // Configura a matriz de LEDs
 
     // Inicializa a arquitetura do cyw43
     while (cyw43_arch_init())
@@ -136,6 +182,15 @@ int main()
          */
         cyw43_arch_poll(); // Necessário para manter o Wi-Fi ativo
         sleep_ms(100);     // Reduz o uso da CPU
+
+        if (is_region_A)
+        {
+            update_matrix_from_level(current_level_A, attention_threshold_A, alert_threshold_A);
+        }
+        else
+        {
+            update_matrix_from_level(current_level_B, attention_threshold_B, alert_threshold_B);
+        }
     }
 
     // Desligar a arquitetura CYW43.
@@ -145,23 +200,6 @@ int main()
 
 // -------------------------------------- Funções ---------------------------------
 
-// Inicializar os Pinos GPIO para acionamento dos LEDs da BitDogLab
-void gpio_led_bitdog(void)
-{
-    // Configuração dos LEDs como saída
-    gpio_init(LED_BLUE_PIN);
-    gpio_set_dir(LED_BLUE_PIN, GPIO_OUT);
-    gpio_put(LED_BLUE_PIN, false);
-
-    gpio_init(LED_GREEN_PIN);
-    gpio_set_dir(LED_GREEN_PIN, GPIO_OUT);
-    gpio_put(LED_GREEN_PIN, false);
-
-    gpio_init(LED_RED_PIN);
-    gpio_set_dir(LED_RED_PIN, GPIO_OUT);
-    gpio_put(LED_RED_PIN, false);
-}
-
 // Função de callback ao aceitar conexões TCP
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
@@ -170,36 +208,42 @@ static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 }
 
 // Tratamento do request do usuário
-void user_request(char **request)
+void user_request(char **request_ptr)
 {
-    char *body = strstr(*request, "\r\n\r\n");
-    if (body != NULL)
+    char *request = *request_ptr;
+
+    if (strstr(request, "GET /?periferico=ledO&acao=ligar") != NULL)
     {
-        body += 4; // Pula os \r\n\r\n
-
-        char regiao;
-        int alerta, atencao;
-
-        // Extrai os dados do corpo
-        if (sscanf(body, "regiao=%c&limiteAlerta=%d&limiteAtencao=%d", &regiao, &alerta, &atencao) == 3)
-        {
-            if (regiao == 'A')
-            {
-                alert_threshold_A = alerta;
-                attention_threshold_A = atencao;
-            }
-            else if (regiao == 'B')
-            {
-                alert_threshold_B = alerta;
-                attention_threshold_B = atencao;
-            }
-        }
-        else
-        {
-            printf("Erro ao interpretar o corpo do POST.\n");
-        }
+        // Lógica para LED Laranja LIGAR
+        set_led_color(ORANGE); // Liga o LED laranja
     }
-};
+    else if (strstr(request, "GET /?periferico=ledR&acao=ligar") != NULL)
+    {
+        // Lógica para LED Vermelho LIGAR (exclusiva)
+        set_led_color(RED); // Liga o LED vermelho
+    }
+    else if (strstr(request, "GET /?periferico=ledG&acao=ligar") != NULL)
+    {
+        // Lógica para LED Verde LIGAR (exclusiva)
+        set_led_color(GREEN); // Liga o LED verde
+    }
+    else if (strstr(request, "GET /?periferico=ledO&acao=desligar") ||
+             strstr(request, "GET /?periferico=ledR&acao=desligar") ||
+             strstr(request, "GET /?periferico=ledG&acao=desligar"))
+    {
+        // Lógica para LED Laranja DESLIGAR
+        set_led_color(DARK); // Desliga todos os LEDs
+    }
+    // Adicione aqui para o BUZZER e outros LEDs/ações se necessário
+    else if (strstr(request, "GET /?periferico=buzzer&acao=ligar") != NULL)
+    {
+        beep_alert(); // Liga o buzzer
+    }
+    else if (strstr(request, "GET /?periferico=buzzer&acao=desligar") != NULL)
+    {
+        set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+    }
+}
 
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
@@ -223,13 +267,46 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     // Cria a resposta HTML
     char html[2048];
 
+    char class_region_A[16];
+    char class_region_B[16];
+
+    // Região A
+    if (current_level_A >= alert_threshold_A)
+    {
+        strcpy(class_region_A, "alerta");
+    }
+    else if (current_level_A >= attention_threshold_A)
+    {
+        strcpy(class_region_A, "atencao");
+    }
+    else
+    {
+        strcpy(class_region_A, "normal");
+    }
+
+    // Região B
+    if (current_level_B >= alert_threshold_B)
+    {
+        strcpy(class_region_B, "alerta");
+    }
+    else if (current_level_B >= attention_threshold_B)
+    {
+        strcpy(class_region_B, "atencao");
+    }
+    else
+    {
+        strcpy(class_region_B, "normal");
+    }
+
     // Cria a resposta HTML em partes
     snprintf(html, sizeof(html),
              "<!DOCTYPE html><html>"
+
              "<head>"
              "<meta charset='UTF-8'>"
              "<meta name='viewport'content='width=device-width,initial-scale=1.0'>"
              "<title>FloodSense</title>"
+
              "<style>"
              "body{font-family:sans-serif;background:#f0f0f0;padding:20px;text-align:center;}"
              ".b{margin:10px auto;background:#fff;padding:30px;border-radius:10px;box-shadow:0 0 5px #ccc;font-weight:bold;max-width:300px;}"
@@ -243,40 +320,50 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "table{margin:0 auto;border-collapse:collapse;}"
              "th,td{padding:4px 8px;border:1px solid #ccc;}"
              "</style>"
+
              "</head>"
+
              "<body>"
              "<h1>FloodSense Monitor</h1>"
-             "<div class='b bk'><h2>Região A</h2><p class='value'>Nível: %dm</p><p class='status alerta'>Alerta</p></div>"
-             "<div class='b bk'><h2>Região B</h2><p class='value'>Nível: %dm</p><p class='status normal'>Normal</p></div>"
+
+             "<div class='b bk'><h2>Região A</h2><p class='value'>Nível: %dm</p><p class='status %s'>Alerta</p></div>"
+             "<div class='b bk'><h2>Região B</h2><p class='value'>Nível: %dm</p><p class='status %s'>Normal</p></div>"
+
              "<div class='b'>"
-             "<h2>Limiares Salvos</h2>"
+             "<h2>Limiares</h2>"
              "<table>"
-             "<tr><th>Região</th><th>Alerta (m)</th><th>Atenção (m)</th></tr>"
+             "<tr><th>Região</th><th>Atenção (m)</th><th>Alerta (m)</th></tr>"
              "<tr><td>A</td><td>%d</td><td>%d</td></tr>"
              "<tr><td>B</td><td>%d</td><td>%d</td></tr>"
              "</table>"
              "</div>"
+
              "<div class='b bk'>"
-             "<h2>Alterar Limiares</h2>"
-             "<form method='POST' action='/'>"
-             "<select name='regiao'>"
-             "<option value=''>Região</option>"
-             "<option value='A'>A</option>"
-             "<option value='B'>B</option>"
-             "</select><br>"
-             "<input type='number' name='limiteAlerta' placeholder='Alerta' min='0' max='100'><br>"
-             "<input type='number' name='limiteAtencao' placeholder='Atenção' min='0' max='100'><br>"
-             "<button type='submit'>Alterar</button>"
+             "<h2>Controle Manual</h2>"
+             "<form method='GET' action='/'>"
+             "<label for='periferico'>Selecione:</label><br>"
+             "<select name='periferico'>"
+             "<option value=''>---</option>"
+             "<option value='buzzer'>Buzzer</option>"
+             "<option value='ledG'>LED - Normal</option>"
+             "<option value='ledO'>LED - Atenção</option>"
+             "<option value='ledR'>LED - Alerta</option>"
+             "</select><br><br>"
+             "<button type='submit' name='acao' value='ligar'>Ligar</button>"
+             "<button type='submit' name='acao' value='desligar'>Desligar</button>"
              "</form>"
              "</div>"
+
              "</body>"
              "</html>",
              current_level_A,
+             class_region_A,
              current_level_B,
-             alert_threshold_A,
+             class_region_B,
              attention_threshold_A,
-             alert_threshold_B,
-             attention_threshold_B);
+             alert_threshold_A,
+             attention_threshold_B,
+             alert_threshold_B);
 
     // Escreve dados para envio (mas não os envia imediatamente).
     tcp_write(tpcb, html, strlen(html), TCP_WRITE_FLAG_COPY);

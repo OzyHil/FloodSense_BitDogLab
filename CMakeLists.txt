@@ -30,9 +30,18 @@ project(Flood_Sense C CXX ASM)
 # Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
 
+include_directories(${CMAKE_SOURCE_DIR}/lib)
+
+# Automatically gather all source files from src/
+file(GLOB_RECURSE SRC_FILES ${CMAKE_SOURCE_DIR}/src/*.c)
+
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(${PROJECT_NAME} ${PROJECT_NAME}.c )
+add_executable(
+    ${PROJECT_NAME} 
+    ${PROJECT_NAME}.c 
+    ${SRC_FILES}
+)
 
 pico_set_program_name(${PROJECT_NAME} "${PROJECT_NAME}")
 pico_set_program_version(${PROJECT_NAME} "0.1")
@@ -48,6 +57,9 @@ target_link_libraries(
     hardware_gpio
     hardware_adc
     pico_cyw43_arch_lwip_threadsafe_background
+    hardware_i2c
+    hardware_pio
+    hardware_pwm
 )
 
 # Add the standard include files to the build
@@ -57,6 +69,11 @@ target_include_directories(
     ${PICO_SDK_PATH}/lib/lwip/src/include
     ${PICO_SDK_PATH}/lib/lwip/src/include/arch
     ${PICO_SDK_PATH}/lib/lwip/src/include/lwip
+)
+
+pico_generate_pio_header(
+    ${PROJECT_NAME} 
+    ${CMAKE_CURRENT_LIST_DIR}/src/pio_matrix.pio
 )
 
 target_sources(
