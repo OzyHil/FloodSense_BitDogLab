@@ -10,14 +10,14 @@
 #include "Led_Matrix.h" // Biblioteca para controle da matriz de LEDs
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
-#define WIFI_SSID "TSUNAMI_EVERALDO" // Nome da rede Wi-Fi
-#define WIFI_PASSWORD "amizade5560"  // Senha da rede Wi-Fi
+#define WIFI_SSID "" // Nome da rede Wi-Fi
+#define WIFI_PASSWORD ""  // Senha da rede Wi-Fi
 
 volatile bool is_region_A = true;
 
 volatile uint8_t alert_threshold_A = 12;
 volatile uint8_t attention_threshold_A = 9;
-volatile uint8_t current_level_A = 11;
+volatile uint8_t current_level_A = 7;
 
 volatile uint8_t alert_threshold_B = 7;
 volatile uint8_t attention_threshold_B = 5;
