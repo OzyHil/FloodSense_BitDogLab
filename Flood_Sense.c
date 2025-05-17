@@ -19,15 +19,25 @@
 #define ATTENTION_THRESHOLD_A 9
 #define ATTENTION_THRESHOLD_B 5
 
-volatile bool is_region_A = true;
+#define INITIAL_LEVEL_A 7
+#define INITIAL_LEVEL_B 4
 
-volatile uint8_t current_level_A = 7;
-volatile uint8_t current_level_B = 4;
+volatile bool is_region_A = true;
+bool buzzer_on = false;
+
+volatile uint8_t current_level_A = INITIAL_LEVEL_A;
+volatile uint8_t current_level_B = INITIAL_LEVEL_B;
 
 #define MAX_READINGS 10
 
-uint8_t readings_A[MAX_READINGS] = {0}; // Array para armazenar os níveis de água da região A
-uint8_t readings_B[MAX_READINGS] = {0}; // Array para armazenar os níveis de água da região B
+uint8_t readings_A[MAX_READINGS] = {INITIAL_LEVEL_A}; // Array para armazenar os níveis de água da região A
+uint8_t readings_B[MAX_READINGS] = {INITIAL_LEVEL_B}; // Array para armazenar os níveis de água da região B
+
+#define MAX_EVENTS 10
+#define EVENT_LENGTH 64
+
+char event_log[MAX_EVENTS][EVENT_LENGTH] = {'\0'}; // Array para armazenar os eventos
+int total_events = 0;
 
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err); // Função de callback ao aceitar conexões TCP
 
@@ -38,6 +48,8 @@ void user_request(char **request); // Tratamento do request do usuário
 void add_reading(uint8_t new_value, uint8_t readings[]); // Move todos os elementos para a esquerda e adiciona novo valor no final
 
 void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size); // Converte os dados de leitura para JSON
+
+void add_event(const char *new_event);
 
 uint32_t last_time_button_J = 0; // Tempo do último pressionamento
 uint32_t last_time_button_A = 0; // Tempo do último pressionamento
@@ -181,13 +193,14 @@ int main()
         sleep_ms(100);     // Reduz o uso da CPU
 
         if (is_region_A)
-        {
             update_matrix_from_level(current_level_A, ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A);
-        }
         else
-        {
             update_matrix_from_level(current_level_B, ATTENTION_THRESHOLD_B, ALERT_THRESHOLD_B);
-        }
+
+        if (buzzer_on)
+            beep_alert(); // Liga o buzzer
+        else
+            set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
     }
 
     // Desligar a arquitetura CYW43.
@@ -209,34 +222,44 @@ void user_request(char **request_ptr)
 
     if (strstr(request, "GET /?periferico=ledO&acao=ligar") != NULL)
     {
-        // Lógica para LED Laranja LIGAR
         set_led_color(ORANGE); // Liga o LED laranja
+        add_event("🟠 LED-Atenção | Ligado");
     }
     else if (strstr(request, "GET /?periferico=ledR&acao=ligar") != NULL)
     {
-        // Lógica para LED Vermelho LIGAR (exclusiva)
         set_led_color(RED); // Liga o LED vermelho
+        add_event("🔴 LED-Alerta | Ligado");
     }
     else if (strstr(request, "GET /?periferico=ledG&acao=ligar") != NULL)
     {
-        // Lógica para LED Verde LIGAR (exclusiva)
         set_led_color(GREEN); // Liga o LED verde
+        add_event("🟢 LED-Normal | Ligado");
     }
-    else if (strstr(request, "GET /?periferico=ledO&acao=desligar") ||
-             strstr(request, "GET /?periferico=ledR&acao=desligar") ||
-             strstr(request, "GET /?periferico=ledG&acao=desligar"))
+    else if (strstr(request, "GET /?periferico=ledO&acao=desligar") != NULL)
     {
-        // Lógica para LED Laranja DESLIGAR
         set_led_color(DARK); // Desliga todos os LEDs
+        add_event("🟠 LED-Atenção | Desligado");
+    }
+    else if (strstr(request, "GET /?periferico=ledR&acao=desligar") != NULL)
+    {
+        set_led_color(DARK); // Desliga todos os LEDs
+        add_event("🔴 LED-Alerta | Desligado");
+    }
+    else if (strstr(request, "GET /?periferico=ledG&acao=desligar") != NULL)
+    {
+        set_led_color(DARK); // Desliga todos os LEDs
+        add_event("🟢 LED-Normal | Desligado");
     }
     // Adicione aqui para o BUZZER e outros LEDs/ações se necessário
     else if (strstr(request, "GET /?periferico=buzzer&acao=ligar") != NULL)
     {
-        beep_alert(); // Liga o buzzer
+        buzzer_on = true;
+        add_event("🔊 Buzzer | Ligado");
     }
     else if (strstr(request, "GET /?periferico=buzzer&acao=desligar") != NULL)
     {
-        set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+        buzzer_on = false; // Desliga o buzzer
+        add_event("🔊 Buzzer | Desligado");
     }
 }
 
@@ -253,8 +276,6 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     char *request = (char *)malloc(p->len + 1);
     memcpy(request, p->payload, p->len);
     request[p->len] = '\0';
-
-    printf("Request: %s\n", request);
 
     // Tratamento de request - Controle dos LEDs
     user_request(&request);
@@ -298,7 +319,19 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     convert_readings_to_JSON(readings_A, readings_A_str, sizeof(readings_A_str));
     convert_readings_to_JSON(readings_B, readings_B_str, sizeof(readings_B_str));
 
-    char html[4096];
+    char events_html[1024] = {'\0'};
+
+    if (total_events > 0)
+    {
+        for (int i = total_events - 1; i >= 0; i--)
+        {
+            char line[128];
+            snprintf(line, sizeof(line), "<tr><td>%s</td><tr>", event_log[i]);
+            strncat(events_html, line, sizeof(events_html) - strlen(events_html) - 1);
+        }
+    }
+
+    char html[6144];
 
     snprintf(html, sizeof(html),
              "HTTP/1.1 200 OK\r\n"
@@ -321,26 +354,40 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              ".Alerta{background:#e53935;color:#fff;}"
              ".Normal{background:#43a047;color:#fff;}"
              ".Atenção{background:#fb8c00;color:#fff;}"
+             ".Blue{background:#1976d2;color:#fff;}"
              "button,input,select{padding:6px;margin:4px;border-radius:5px;border:1px solid #838282;font-size:14px;}"
              "table{margin:0 auto;border-collapse:collapse;}"
              "th,td{padding:4px 8px;border:1px solid #ccc;}"
-             ".tab-btn{margin:10px;padding:10px;background:#1976d2;color:#fff;border:none;border-radius:5px;cursor:pointer;}"
+             ".tab-btn{margin:10px;padding:10px;color:#fff;border:none;border-radius:5px;cursor:pointer;}"
              ".hidden{display:none;}"
              "</style>"
              "</head>"
              "<body>"
              "<h1>FloodSense Monitor</h1>"
+
+             "<div>"
+             "<button class='tab-btn Blue' onclick='location.href=\"/\"'>🔄 Atualizar Página</button>"
+             "<button class='tab-btn Blue' onclick=\"showTab('monitor')\">👁️ Monitoramento</button>"
+             "<button class='tab-btn Blue' onclick=\"showTab('controle')\">⚙️ Controle Manual</button>"
+             "</div>"
+
              "<div id='monitor'>"
+
+             "<div style='display: flex; flex-wrap: wrap; justify-content: center; gap:20px;'>"
+
+             "<div>"
              "<div class='b bk'>"
              "<h2>Região A</h2>"
              "<p class='value'>Nível: %dm</p>"
              "<p class='status %s'>%s</p>"
              "</div>"
+
              "<div class='b bk'>"
              "<h2>Região B</h2>"
              "<p class='value'>Nível: %dm</p>"
              "<p class='status %s'>%s</p>"
              "</div>"
+
              "<div class='b bk'>"
              "<h2>Limiares</h2>"
              "<table>"
@@ -349,20 +396,22 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<tr><td>B</td><td>%d</td><td>%d</td></tr>"
              "</table>"
              "</div>"
+
              "<div class='b'>"
              "<h2>Histórico de Níveis</h2>"
              "<div class='b bk'><canvas id='nivelChartA' width='300' height='200'></canvas></div>"
              "<div class='b bk'><canvas id='nivelChartB' width='300' height='200'></canvas></div>"
              "</div>"
+             "</div>"
+             "<div>"
              "<div class='b bk'>"
              "<h2>Últimos Eventos</h2>"
-             "<ul style='text-align:left;font-weight:normal;'>"
-             "<li>Alerta ativado na Região A</li>"
-             "<li>LED - Atenção ligado</li>"
-             "<li>Buzzer desligado</li>"
-             "</ul>"
+             "<table style='text-align:left;'>%s</table>"
              "</div>"
              "</div>"
+             "</div>"
+             "</div>"
+
              "<div id='controle' class='hidden'>"
              "<div class='b'>"
              "<h2>Controle Manual</h2>"
@@ -375,10 +424,12 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<option value='ledO'>LED - Atenção</option>"
              "<option value='ledR'>LED - Alerta</option>"
              "</select><br><br>"
-             "<button type='submit' name='acao' value='ligar'>Ligar</button>"
+             "<button class='tab-btn Normal' type='submit' name='acao' value='ligar'>Ligar</button>"
+             "<button class='tab-btn Alerta' type='submit' name='acao' value='desligar'>Desligar</button>"
              "</form>"
              "</div>"
              "</div>"
+
              "<script>"
              "function showTab(tabId){"
              "document.getElementById('monitor').classList.add('hidden');"
@@ -387,7 +438,6 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "}"
              "new Chart(document.getElementById('nivelChartA').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região A (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
              "new Chart(document.getElementById('nivelChartB').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região B (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
-             "setInterval(function(){location.href='/';}, 5000);"
              "</script>"
              "</body>"
              "</html>",
@@ -399,6 +449,9 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              // Limiares:
              ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A,
              ATTENTION_THRESHOLD_B, ALERT_THRESHOLD_B,
+
+             // Eventos:
+             events_html,
 
              // dados dos arrays:
              readings_A_str, MAX_READINGS,
@@ -441,4 +494,22 @@ void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size)
             break;
     }
     snprintf(buffer + len, size - len, "]");
+}
+
+void add_event(const char *new_event)
+{
+    if (total_events < MAX_EVENTS)
+    {
+        total_events++;
+    }
+    else
+    {
+        for (int i = 1; i < MAX_EVENTS; i++)
+        {
+            strncpy(event_log[i - 1], event_log[i], EVENT_LENGTH);
+        }
+    }
+
+    strncpy(event_log[total_events - 1], new_event, EVENT_LENGTH - 1);
+    event_log[total_events - 1][EVENT_LENGTH - 1] = '\0';
 }

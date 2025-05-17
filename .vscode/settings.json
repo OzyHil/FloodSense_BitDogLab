@@ -38,6 +38,13 @@
     "raspberry-pi-pico.ninjaPath": "${HOME}/.pico-sdk/ninja/v1.12.1/ninja",
     "files.associations": {
         "*.txt": "makefile",
-        "cstdint": "c"
+        "cstdint": "c",
+        "memory_resource": "c",
+        "format": "c",
+        "fstream": "c",
+        "ostream": "c",
+        "sstream": "c",
+        "streambuf": "c",
+        "system_error": "c"
     }
 }
