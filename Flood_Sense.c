@@ -10,36 +10,34 @@
 #include "Led_Matrix.h" // Biblioteca para controle da matriz de LEDs
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
-#define WIFI_SSID "" // Nome da rede Wi-Fi
-#define WIFI_PASSWORD ""  // Senha da rede Wi-Fi
+#define WIFI_SSID "TSUNAMI_EVERALDO" // Nome da rede Wi-Fi
+#define WIFI_PASSWORD "amizade5560"  // Senha da rede Wi-Fi
+
+#define ALERT_THRESHOLD_A 12
+#define ALERT_THRESHOLD_B 7
+
+#define ATTENTION_THRESHOLD_A 9
+#define ATTENTION_THRESHOLD_B 5
 
 volatile bool is_region_A = true;
 
-volatile uint8_t alert_threshold_A = 12;
-volatile uint8_t attention_threshold_A = 9;
 volatile uint8_t current_level_A = 7;
-
-volatile uint8_t alert_threshold_B = 7;
-volatile uint8_t attention_threshold_B = 5;
 volatile uint8_t current_level_B = 4;
 
-// Inicializar os Pinos GPIO para acionamento dos LEDs da BitDogLab
-void gpio_led_bitdog(void);
+#define MAX_READINGS 10
 
-// Função de callback ao aceitar conexões TCP
-static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err);
+uint8_t readings_A[MAX_READINGS] = {0}; // Array para armazenar os níveis de água da região A
+uint8_t readings_B[MAX_READINGS] = {0}; // Array para armazenar os níveis de água da região B
 
-// Função de callback para processar requisições HTTP
-static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err);
+static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err); // Função de callback ao aceitar conexões TCP
 
-// Leitura da temperatura interna
-float temp_read(void);
+static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err); // Função de callback para processar requisições HTTP
 
-// Tratamento do request do usuário
-void user_request(char **request);
+void user_request(char **request); // Tratamento do request do usuário
 
-// Trecho para modo BOOTSEL com botão B
-#include "pico/bootrom.h"
+void add_reading(uint8_t new_value, uint8_t readings[]); // Move todos os elementos para a esquerda e adiciona novo valor no final
+
+void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size); // Converte os dados de leitura para JSON
 
 uint32_t last_time_button_J = 0; // Tempo do último pressionamento
 uint32_t last_time_button_A = 0; // Tempo do último pressionamento
@@ -66,12 +64,12 @@ void gpio_irq_handler(uint gpio, uint32_t events)
             if (is_region_A)
             {
                 current_level_A++;
-                printf("Nível A: %d\n", current_level_A);
+                add_reading(current_level_A, readings_A);
             }
             else
             {
                 current_level_B++;
-                printf("Nível B: %d\n", current_level_B);
+                add_reading(current_level_B, readings_B);
             }
             last_time_button_A = now;
         }
@@ -86,16 +84,20 @@ void gpio_irq_handler(uint gpio, uint32_t events)
                 if (current_level_A > 0)
                 {
                     current_level_A--;
+                    add_reading(current_level_A, readings_A);
                 }
-                printf("Nível A: %d\n", current_level_A);
+                else
+                    add_reading(current_level_A, readings_A);
             }
             else
             {
                 if (current_level_B > 0)
                 {
                     current_level_B--;
+                    add_reading(current_level_B, readings_B);
                 }
-                printf("Nível B: %d\n", current_level_B);
+                else
+                    add_reading(current_level_B, readings_B);
             }
             last_time_button_B = now;
         }
@@ -175,21 +177,16 @@ int main()
 
     while (true)
     {
-        /*
-         * Efetuar o processamento exigido pelo cyw43_driver ou pela stack TCP/IP.
-         * Este método deve ser chamado periodicamente a partir do ciclo principal
-         * quando se utiliza um estilo de sondagem pico_cyw43_arch
-         */
         cyw43_arch_poll(); // Necessário para manter o Wi-Fi ativo
         sleep_ms(100);     // Reduz o uso da CPU
 
         if (is_region_A)
         {
-            update_matrix_from_level(current_level_A, attention_threshold_A, alert_threshold_A);
+            update_matrix_from_level(current_level_A, ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A);
         }
         else
         {
-            update_matrix_from_level(current_level_B, attention_threshold_B, alert_threshold_B);
+            update_matrix_from_level(current_level_B, ATTENTION_THRESHOLD_B, ALERT_THRESHOLD_B);
         }
     }
 
@@ -197,8 +194,6 @@ int main()
     cyw43_arch_deinit();
     return 0;
 }
-
-// -------------------------------------- Funções ---------------------------------
 
 // Função de callback ao aceitar conexões TCP
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
@@ -264,72 +259,89 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     // Tratamento de request - Controle dos LEDs
     user_request(&request);
 
-    // Cria a resposta HTML
-    char html[2048];
-
     char class_region_A[16];
     char class_region_B[16];
 
     // Região A
-    if (current_level_A >= alert_threshold_A)
+    if (current_level_A >= ALERT_THRESHOLD_A)
     {
-        strcpy(class_region_A, "alerta");
+        strcpy(class_region_A, "Alerta");
     }
-    else if (current_level_A >= attention_threshold_A)
+    else if (current_level_A >= ATTENTION_THRESHOLD_A)
     {
-        strcpy(class_region_A, "atencao");
+        strcpy(class_region_A, "Atenção");
     }
     else
     {
-        strcpy(class_region_A, "normal");
+        strcpy(class_region_A, "Normal");
     }
 
     // Região B
-    if (current_level_B >= alert_threshold_B)
+    if (current_level_B >= ALERT_THRESHOLD_B)
     {
-        strcpy(class_region_B, "alerta");
+        strcpy(class_region_B, "Alerta");
     }
-    else if (current_level_B >= attention_threshold_B)
+    else if (current_level_B >= ATTENTION_THRESHOLD_B)
     {
-        strcpy(class_region_B, "atencao");
+        strcpy(class_region_B, "Atenção");
     }
     else
     {
-        strcpy(class_region_B, "normal");
+        strcpy(class_region_B, "Normal");
     }
 
-    // Cria a resposta HTML em partes
-    snprintf(html, sizeof(html),
-             "<!DOCTYPE html><html>"
+    // Função para converter arrays uint8_t para string JSON, para JS usar nos gráficos:
+    char readings_A_str[300] = {0};
+    char readings_B_str[300] = {0};
 
+    // Converta antes do snprintf principal
+    convert_readings_to_JSON(readings_A, readings_A_str, sizeof(readings_A_str));
+    convert_readings_to_JSON(readings_B, readings_B_str, sizeof(readings_B_str));
+
+    char html[4096];
+
+    snprintf(html, sizeof(html),
+             "HTTP/1.1 200 OK\r\n"
+             "Content-Type: text/html\r\n"
+             "Connection: close\r\n"
+             "\r\n"
+             "<!DOCTYPE html>"
+             "<html>"
              "<head>"
              "<meta charset='UTF-8'>"
-             "<meta name='viewport'content='width=device-width,initial-scale=1.0'>"
+             "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
              "<title>FloodSense</title>"
-
+             "<script src='https://cdn.jsdelivr.net/npm/chart.js'></script>"
              "<style>"
              "body{font-family:sans-serif;background:#f0f0f0;padding:20px;text-align:center;}"
-             ".b{margin:10px auto;background:#fff;padding:30px;border-radius:10px;box-shadow:0 0 5px #ccc;font-weight:bold;max-width:300px;}"
-             ".bk{display:inline-block;margin-left:10px;margin-right:10px;}"
-             ".value{color:#1976d2;}"
+             ".b{display:block;margin:10px auto;padding:20px;border-radius:10px;box-shadow:0 0 5px #ccc;background:#fff;font-weight:bold;width:fit-content;max-width:100%;}"
+             ".bk{display:inline-block;vertical-align:top;margin:10px;}"
+             ".value{color:#1976d2;font-size:20px;}"
              ".status{padding:4px 8px;border-radius:4px;display:inline-block;}"
-             ".alerta{background:#e53935;color:#fff;}"
-             ".normal{background:#43a047;color:#fff;}"
-             ".atencao{background:#fb8c00;color:#fff;}"
+             ".Alerta{background:#e53935;color:#fff;}"
+             ".Normal{background:#43a047;color:#fff;}"
+             ".Atenção{background:#fb8c00;color:#fff;}"
              "button,input,select{padding:6px;margin:4px;border-radius:5px;border:1px solid #838282;font-size:14px;}"
              "table{margin:0 auto;border-collapse:collapse;}"
              "th,td{padding:4px 8px;border:1px solid #ccc;}"
+             ".tab-btn{margin:10px;padding:10px;background:#1976d2;color:#fff;border:none;border-radius:5px;cursor:pointer;}"
+             ".hidden{display:none;}"
              "</style>"
-
              "</head>"
-
              "<body>"
              "<h1>FloodSense Monitor</h1>"
-
-             "<div class='b bk'><h2>Região A</h2><p class='value'>Nível: %dm</p><p class='status %s'>Alerta</p></div>"
-             "<div class='b bk'><h2>Região B</h2><p class='value'>Nível: %dm</p><p class='status %s'>Normal</p></div>"
-
-             "<div class='b'>"
+             "<div id='monitor'>"
+             "<div class='b bk'>"
+             "<h2>Região A</h2>"
+             "<p class='value'>Nível: %dm</p>"
+             "<p class='status %s'>%s</p>"
+             "</div>"
+             "<div class='b bk'>"
+             "<h2>Região B</h2>"
+             "<p class='value'>Nível: %dm</p>"
+             "<p class='status %s'>%s</p>"
+             "</div>"
+             "<div class='b bk'>"
              "<h2>Limiares</h2>"
              "<table>"
              "<tr><th>Região</th><th>Atenção (m)</th><th>Alerta (m)</th></tr>"
@@ -337,8 +349,22 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<tr><td>B</td><td>%d</td><td>%d</td></tr>"
              "</table>"
              "</div>"
-
+             "<div class='b'>"
+             "<h2>Histórico de Níveis</h2>"
+             "<div class='b bk'><canvas id='nivelChartA' width='300' height='200'></canvas></div>"
+             "<div class='b bk'><canvas id='nivelChartB' width='300' height='200'></canvas></div>"
+             "</div>"
              "<div class='b bk'>"
+             "<h2>Últimos Eventos</h2>"
+             "<ul style='text-align:left;font-weight:normal;'>"
+             "<li>Alerta ativado na Região A</li>"
+             "<li>LED - Atenção ligado</li>"
+             "<li>Buzzer desligado</li>"
+             "</ul>"
+             "</div>"
+             "</div>"
+             "<div id='controle' class='hidden'>"
+             "<div class='b'>"
              "<h2>Controle Manual</h2>"
              "<form method='GET' action='/'>"
              "<label for='periferico'>Selecione:</label><br>"
@@ -350,20 +376,33 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<option value='ledR'>LED - Alerta</option>"
              "</select><br><br>"
              "<button type='submit' name='acao' value='ligar'>Ligar</button>"
-             "<button type='submit' name='acao' value='desligar'>Desligar</button>"
              "</form>"
              "</div>"
-
+             "</div>"
+             "<script>"
+             "function showTab(tabId){"
+             "document.getElementById('monitor').classList.add('hidden');"
+             "document.getElementById('controle').classList.add('hidden');"
+             "document.getElementById(tabId).classList.remove('hidden');"
+             "}"
+             "new Chart(document.getElementById('nivelChartA').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região A (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
+             "new Chart(document.getElementById('nivelChartB').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região B (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
+             "setInterval(function(){location.href='/';}, 5000);"
+             "</script>"
              "</body>"
              "</html>",
-             current_level_A,
-             class_region_A,
-             current_level_B,
-             class_region_B,
-             attention_threshold_A,
-             alert_threshold_A,
-             attention_threshold_B,
-             alert_threshold_B);
+
+             // Variáveis para mostrar níveis atuais e classes:
+             current_level_A, class_region_A, class_region_A,
+             current_level_B, class_region_B, class_region_B,
+
+             // Limiares:
+             ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A,
+             ATTENTION_THRESHOLD_B, ALERT_THRESHOLD_B,
+
+             // dados dos arrays:
+             readings_A_str, MAX_READINGS,
+             readings_B_str, MAX_READINGS);
 
     // Escreve dados para envio (mas não os envia imediatamente).
     tcp_write(tpcb, html, strlen(html), TCP_WRITE_FLAG_COPY);
@@ -378,4 +417,28 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     pbuf_free(p);
 
     return ERR_OK;
+}
+
+// Move todos os elementos para a esquerda e adiciona novo valor no final
+void add_reading(uint8_t new_value, uint8_t readings[])
+{
+    for (int i = 0; i < MAX_READINGS - 1; i++)
+    {
+        readings[i] = readings[i + 1];
+    }
+    readings[MAX_READINGS - 1] = new_value;
+}
+
+// Converte os dados de leitura para JSON
+void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size)
+{
+    int len = 0;
+    len += snprintf(buffer + len, size - len, "[");
+    for (int i = 0; i < MAX_READINGS; i++)
+    {
+        len += snprintf(buffer + len, size - len, "{\"x\":%d,\"y\":%d}%s", i + 1, readings[i], (i < MAX_READINGS - 1) ? "," : "");
+        if (len >= size)
+            break;
+    }
+    snprintf(buffer + len, size - len, "]");
 }
