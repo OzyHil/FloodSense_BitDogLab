@@ -19,6 +19,11 @@
 #include "lwip/tcp.h"   // Lightweight IP stack - fornece funções e estruturas para trabalhar com o protocolo TCP
 #include "lwip/netif.h" // Lightweight IP stack - fornece funções e estruturas para trabalhar com interfaces de rede (netif)
 
+#define I2C_PORT i2c1
+#define I2C_SDA 14
+#define I2C_SCL 15
+#define ADDRESS 0x3C
+
 // Função para inicializar a configuração do sistema (clocks, I/O, etc.)
 void init_system_config();
 

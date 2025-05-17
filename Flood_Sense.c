@@ -8,6 +8,7 @@
 #include "Buzzer.h"     // Biblioteca do buzzer
 #include "Button.h"     // Biblioteca do botão
 #include "Led_Matrix.h" // Biblioteca para controle da matriz de LEDs
+#include "ssd1306.h"    // Biblioteca para controle do display OLED
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
 #define WIFI_SSID "TSUNAMI_EVERALDO" // Nome da rede Wi-Fi
@@ -39,6 +40,8 @@ uint8_t readings_B[MAX_READINGS] = {INITIAL_LEVEL_B}; // Array para armazenar os
 char event_log[MAX_EVENTS][EVENT_LENGTH] = {'\0'}; // Array para armazenar os eventos
 int total_events = 0;
 
+char region[20];
+
 static err_t tcp_server_accept(void *arg, struct tcp_pcb *newpcb, err_t err); // Função de callback ao aceitar conexões TCP
 
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err); // Função de callback para processar requisições HTTP
@@ -50,6 +53,8 @@ void add_reading(uint8_t new_value, uint8_t readings[]); // Move todos os elemen
 void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size); // Converte os dados de leitura para JSON
 
 void add_event(const char *new_event);
+
+void configure_display(ssd1306_t *ssd); // Configuração do display OLED
 
 uint32_t last_time_button_J = 0; // Tempo do último pressionamento
 uint32_t last_time_button_A = 0; // Tempo do último pressionamento
@@ -64,7 +69,6 @@ void gpio_irq_handler(uint gpio, uint32_t events)
         if ((now - last_time_button_J) >= DEBOUNCE_DELAY)
         {
             is_region_A = !is_region_A;
-            printf("Região ativa: %s\n", is_region_A ? "A" : "B");
             last_time_button_J = now;
         }
     }
@@ -127,14 +131,26 @@ int main()
 
     init_system_config(); // Inicializa a configuração do sistema
 
+    ssd1306_t ssd; // Estrutura que representa o display OLED SSD1306
+
+    configure_display(&ssd); // Configuração do display
     configure_leds();        // Configura os LEDs
     configure_buzzer();      // Configura o buzzer
     configure_leds_matrix(); // Configura a matriz de LEDs
 
+    // Limpa o display. O display inicia com todos os pixels apagados.
+    ssd1306_fill(&ssd, false);
+
+    ssd1306_draw_string(&ssd, "Inicializando", 5, 5);
+    ssd1306_send_data(&ssd);
+
     // Inicializa a arquitetura do cyw43
     while (cyw43_arch_init())
     {
-        printf("Falha ao inicializar Wi-Fi\n");
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "Falha", 5, 5);
+        ssd1306_send_data(&ssd);
+
         sleep_ms(100);
         return -1;
     }
@@ -146,33 +162,37 @@ int main()
     cyw43_arch_enable_sta_mode();
 
     // Conectar à rede WiFI - fazer um loop até que esteja conectado
-    printf("Conectando ao Wi-Fi...\n");
+
+    ssd1306_fill(&ssd, false);
+    ssd1306_draw_string(&ssd, "Conectando...", 5, 5);
+    ssd1306_send_data(&ssd);
+
     while (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASSWORD, CYW43_AUTH_WPA2_AES_PSK, 20000))
     {
-        printf("Falha ao conectar ao Wi-Fi\n");
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "Falha", 5, 5);
+        ssd1306_send_data(&ssd);
+
         sleep_ms(100);
         return -1;
-    }
-    printf("Conectado ao Wi-Fi\n");
-
-    // Caso seja a interface de rede padrão - imprimir o IP do dispositivo.
-    if (netif_default)
-    {
-        printf("IP do dispositivo: %s\n", ipaddr_ntoa(&netif_default->ip_addr));
     }
 
     // Configura o servidor TCP - cria novos PCBs TCP. É o primeiro passo para estabelecer uma conexão TCP.
     struct tcp_pcb *server = tcp_new();
     if (!server)
     {
-        printf("Falha ao criar servidor TCP\n");
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "Falha no server", 5, 5);
+        ssd1306_send_data(&ssd);
         return -1;
     }
 
     // vincula um PCB (Protocol Control Block) TCP a um endereço IP e porta específicos.
     if (tcp_bind(server, IP_ADDR_ANY, 80) != ERR_OK)
     {
-        printf("Falha ao associar servidor TCP à porta 80\n");
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, "Falha porta 80", 5, 5);
+        ssd1306_send_data(&ssd);
         return -1;
     }
 
@@ -181,7 +201,6 @@ int main()
 
     // Define uma função de callback para aceitar conexões TCP de entrada. É um passo importante na configuração de servidores TCP.
     tcp_accept(server, tcp_server_accept);
-    printf("Servidor ouvindo na porta 80\n");
 
     // Inicializa o conversor ADC
     adc_init();
@@ -201,6 +220,17 @@ int main()
             beep_alert(); // Liga o buzzer
         else
             set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+
+
+        // Define a string com base na variável
+        snprintf(region, sizeof(region), "Regiao: %s", is_region_A ? "A" : "B");
+
+        // Exibe no display
+        ssd1306_fill(&ssd, false);
+        ssd1306_draw_string(&ssd, ipaddr_ntoa(&netif_default->ip_addr), 5, 5);
+        ssd1306_draw_string(&ssd, "Porta 80", 5, 18);
+        ssd1306_draw_string(&ssd, region, 5, 50);
+        ssd1306_send_data(&ssd);
     }
 
     // Desligar a arquitetura CYW43.
@@ -512,4 +542,19 @@ void add_event(const char *new_event)
 
     strncpy(event_log[total_events - 1], new_event, EVENT_LENGTH - 1);
     event_log[total_events - 1][EVENT_LENGTH - 1] = '\0';
+}
+
+// Função para configurar o display
+void configure_display(ssd1306_t *ssd)
+{
+    i2c_init(I2C_PORT, 400 * 1000); // Inicializa o I2C à 400khz
+
+    gpio_set_function(I2C_SDA, GPIO_FUNC_I2C); // Set the GPIO pin function to I2C
+    gpio_set_function(I2C_SCL, GPIO_FUNC_I2C); // Set the GPIO pin function to I2C
+    gpio_pull_up(I2C_SDA);                     // Pull up the data line
+    gpio_pull_up(I2C_SCL);                     // Pull up the clock line
+
+    ssd1306_init(ssd, WIDTH, HEIGHT, false, ADDRESS, I2C_PORT); // Inicializa o display
+    ssd1306_config(ssd);                                        // Configura o display
+    ssd1306_send_data(ssd);                                     // Envia os dados para o display
 }
