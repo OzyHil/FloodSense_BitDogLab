@@ -396,7 +396,6 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<h1>FloodSense Monitor</h1>"
 
              "<div>"
-             "<button class='tab-btn Blue' onclick='location.href=\"/\"'>🔄 Atualizar Página</button>"
              "<button class='tab-btn Blue' onclick=\"showTab('monitor')\">👁️ Monitoramento</button>"
              "<button class='tab-btn Blue' onclick=\"showTab('controle')\">⚙️ Controle Manual</button>"
              "</div>"
@@ -469,6 +468,8 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "new Chart(document.getElementById('nivelChartA').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região A (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
              "new Chart(document.getElementById('nivelChartB').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região B (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
              "</script>"
+             
+             "<script>(function(){setInterval(()=>{const controle=document.getElementById('controle');if(controle&&controle.classList.contains('hidden')){window.location.href='/';}},8000);})();</script>"
              "</body>"
              "</html>",
 
