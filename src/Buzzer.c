@@ -20,7 +20,7 @@ void set_buzzer_level(uint gpio, uint16_t level)
 // Função para emitir um alerta sonoro (beep) utilizando o buzzer
 void beep_alert()
 {
-    for (int i = 0; i < 20; i++)
+    for (int i = 0; i < 5; i++)
     {
         set_buzzer_level(BUZZER_A, WRAP_PWM_BUZZER / 90);
         sleep_ms(100);

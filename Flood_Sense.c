@@ -11,31 +11,38 @@
 #include "ssd1306.h"    // Biblioteca para controle do display OLED
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
-#define WIFI_SSID "TSUNAMI_EVERALDO" // Nome da rede Wi-Fi
-#define WIFI_PASSWORD "amizade5560"  // Senha da rede Wi-Fi
+#define WIFI_SSID "TSUNAMI_EVERALDO"   // Nome da rede Wi-Fi
+#define WIFI_PASSWORD "amizade5560" // Senha da rede Wi-Fi
 
 #define ALERT_THRESHOLD_A 12
-#define ALERT_THRESHOLD_B 7
+#define ALERT_THRESHOLD_B 20
 
 #define ATTENTION_THRESHOLD_A 9
-#define ATTENTION_THRESHOLD_B 5
+#define ATTENTION_THRESHOLD_B 16
 
-#define INITIAL_LEVEL_A 7
-#define INITIAL_LEVEL_B 4
+#define INITIAL_LEVEL_A 5
+#define INITIAL_LEVEL_B 3
+
+#define MAX_EVENTS 10
+#define EVENT_LENGTH 32
+#define MAX_READINGS 10
+
+typedef struct
+{
+    led_color led_color;
+    bool buzzer_on;
+    volatile uint8_t current_level;
+    char led_status_label[EVENT_LENGTH];    // Label para o LED
+    char buzzer_status_label[EVENT_LENGTH]; // Label para o LED
+} region_state;
 
 volatile bool is_region_A = true;
-bool buzzer_on = false;
 
-volatile uint8_t current_level_A = INITIAL_LEVEL_A;
-volatile uint8_t current_level_B = INITIAL_LEVEL_B;
-
-#define MAX_READINGS 10
+region_state region_A;
+region_state region_B;
 
 uint8_t readings_A[MAX_READINGS] = {INITIAL_LEVEL_A}; // Array para armazenar os níveis de água da região A
 uint8_t readings_B[MAX_READINGS] = {INITIAL_LEVEL_B}; // Array para armazenar os níveis de água da região B
-
-#define MAX_EVENTS 10
-#define EVENT_LENGTH 64
 
 char event_log[MAX_EVENTS][EVENT_LENGTH] = {'\0'}; // Array para armazenar os eventos
 int total_events = 0;
@@ -52,9 +59,13 @@ void add_reading(uint8_t new_value, uint8_t readings[]); // Move todos os elemen
 
 void convert_readings_to_JSON(uint8_t *readings, char *buffer, int size); // Converte os dados de leitura para JSON
 
-void add_event(const char *new_event);
+void add_event(const char *new_event); // Adiciona um novo evento ao log
+
+void process_led_request(region_state *region, led_color color_on, const char *label_on, const char *label_off, bool turn_on); // Processa o pedido de controle do LED
 
 void configure_display(ssd1306_t *ssd); // Configuração do display OLED
+
+void process_buzzer_request(region_state *region, bool turn_on); // Processa o pedido de controle do buzzer
 
 uint32_t last_time_button_J = 0; // Tempo do último pressionamento
 uint32_t last_time_button_A = 0; // Tempo do último pressionamento
@@ -79,13 +90,13 @@ void gpio_irq_handler(uint gpio, uint32_t events)
         {
             if (is_region_A)
             {
-                current_level_A++;
-                add_reading(current_level_A, readings_A);
+                region_A.current_level++;
+                add_reading(region_A.current_level, readings_A);
             }
             else
             {
-                current_level_B++;
-                add_reading(current_level_B, readings_B);
+                region_B.current_level++;
+                add_reading(region_B.current_level, readings_B);
             }
             last_time_button_A = now;
         }
@@ -97,23 +108,23 @@ void gpio_irq_handler(uint gpio, uint32_t events)
         {
             if (is_region_A)
             {
-                if (current_level_A > 0)
+                if (region_A.current_level > 0)
                 {
-                    current_level_A--;
-                    add_reading(current_level_A, readings_A);
+                    region_A.current_level--;
+                    add_reading(region_A.current_level, readings_A);
                 }
                 else
-                    add_reading(current_level_A, readings_A);
+                    add_reading(region_A.current_level, readings_A);
             }
             else
             {
-                if (current_level_B > 0)
+                if (region_B.current_level > 0)
                 {
-                    current_level_B--;
-                    add_reading(current_level_B, readings_B);
+                    region_B.current_level--;
+                    add_reading(region_B.current_level, readings_B);
                 }
                 else
-                    add_reading(current_level_B, readings_B);
+                    add_reading(region_B.current_level, readings_B);
             }
             last_time_button_B = now;
         }
@@ -202,9 +213,17 @@ int main()
     // Define uma função de callback para aceitar conexões TCP de entrada. É um passo importante na configuração de servidores TCP.
     tcp_accept(server, tcp_server_accept);
 
-    // Inicializa o conversor ADC
-    adc_init();
-    adc_set_temp_sensor_enabled(true);
+    region_A.led_color = GREEN;
+    region_A.buzzer_on = false;
+    region_A.current_level = INITIAL_LEVEL_A;
+    strcpy(region_A.led_status_label, "🟢 LED-Normal | Ligado");
+    strcpy(region_A.buzzer_status_label, "🔊 Buzzer | Desligado");
+
+    region_B.led_color = GREEN;
+    region_B.buzzer_on = false;
+    region_B.current_level = INITIAL_LEVEL_B;
+    strcpy(region_B.led_status_label, "🟢 LED-Normal | Ligado");
+    strcpy(region_B.buzzer_status_label, "🔊 Buzzer | Desligado");
 
     while (true)
     {
@@ -212,15 +231,25 @@ int main()
         sleep_ms(100);     // Reduz o uso da CPU
 
         if (is_region_A)
-            update_matrix_from_level(current_level_A, ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A);
-        else
-            update_matrix_from_level(current_level_B, ATTENTION_THRESHOLD_B, ALERT_THRESHOLD_B);
+        {
+            set_led_color(region_A.led_color); // Define a cor do LED
+            update_matrix_from_level(region_A.current_level, ALERT_THRESHOLD_A);
 
-        if (buzzer_on)
-            beep_alert(); // Liga o buzzer
+            if (region_A.buzzer_on)
+                beep_alert(); // Liga o buzzer
+            else
+                set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+        }
         else
-            set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+        {
+            set_led_color(region_B.led_color); // Define a cor do LED
+            update_matrix_from_level(region_B.current_level, ALERT_THRESHOLD_B);
 
+            if (region_B.buzzer_on)
+                beep_alert(); // Liga o buzzer
+            else
+                set_buzzer_level(BUZZER_A, 0); // Desliga o buzzer
+        }
 
         // Define a string com base na variável
         snprintf(region, sizeof(region), "Regiao: %s", is_region_A ? "A" : "B");
@@ -250,47 +279,57 @@ void user_request(char **request_ptr)
 {
     char *request = *request_ptr;
 
-    if (strstr(request, "GET /?periferico=ledO&acao=ligar") != NULL)
+    bool turn_on = strstr(request, "acao=ligar") != NULL;
+    bool regiao_A = strstr(request, "regiao=A") != NULL;
+    bool regiao_B = strstr(request, "regiao=B") != NULL;
+
+    region_state *target_region = regiao_A ? &region_A : (regiao_B ? &region_B : NULL);
+
+    if (target_region != NULL)
     {
-        set_led_color(ORANGE); // Liga o LED laranja
-        add_event("🟠 LED-Atenção | Ligado");
+        if (strstr(request, "periferico=ledO"))
+        {
+            process_led_request(target_region, ORANGE, "🟠 LED-Atenção | Ligado", "🟠 LED-Atenção | Desligado", turn_on);
+        }
+        else if (strstr(request, "periferico=ledR"))
+        {
+            process_led_request(target_region, RED, "🔴 LED-Alerta | Ligado", "🔴 LED-Alerta | Desligado", turn_on);
+        }
+        else if (strstr(request, "periferico=ledG"))
+        {
+            process_led_request(target_region, GREEN, "🟢 LED-Normal | Ligado", "🟢 LED-Normal | Desligado", turn_on);
+        }
+        else if (strstr(request, "periferico=buzzer"))
+        {
+            process_buzzer_request(target_region, turn_on);
+        }
     }
-    else if (strstr(request, "GET /?periferico=ledR&acao=ligar") != NULL)
+}
+
+void process_led_request(region_state *region, led_color color_on, const char *label_on, const char *label_off, bool turn_on)
+{
+    if (turn_on)
     {
-        set_led_color(RED); // Liga o LED vermelho
-        add_event("🔴 LED-Alerta | Ligado");
+        region->led_color = color_on;
+        set_led_color(color_on);
+        strcpy(region->led_status_label, label_on);
+        add_event(label_on);
     }
-    else if (strstr(request, "GET /?periferico=ledG&acao=ligar") != NULL)
+    else
     {
-        set_led_color(GREEN); // Liga o LED verde
-        add_event("🟢 LED-Normal | Ligado");
+        region->led_color = DARK;
+        set_led_color(DARK);
+        strcpy(region->led_status_label, label_off);
+        add_event(label_off);
     }
-    else if (strstr(request, "GET /?periferico=ledO&acao=desligar") != NULL)
-    {
-        set_led_color(DARK); // Desliga todos os LEDs
-        add_event("🟠 LED-Atenção | Desligado");
-    }
-    else if (strstr(request, "GET /?periferico=ledR&acao=desligar") != NULL)
-    {
-        set_led_color(DARK); // Desliga todos os LEDs
-        add_event("🔴 LED-Alerta | Desligado");
-    }
-    else if (strstr(request, "GET /?periferico=ledG&acao=desligar") != NULL)
-    {
-        set_led_color(DARK); // Desliga todos os LEDs
-        add_event("🟢 LED-Normal | Desligado");
-    }
-    // Adicione aqui para o BUZZER e outros LEDs/ações se necessário
-    else if (strstr(request, "GET /?periferico=buzzer&acao=ligar") != NULL)
-    {
-        buzzer_on = true;
-        add_event("🔊 Buzzer | Ligado");
-    }
-    else if (strstr(request, "GET /?periferico=buzzer&acao=desligar") != NULL)
-    {
-        buzzer_on = false; // Desliga o buzzer
-        add_event("🔊 Buzzer | Desligado");
-    }
+}
+
+void process_buzzer_request(region_state *region, bool turn_on)
+{
+    region->buzzer_on = turn_on;
+    const char *label = turn_on ? "🔊 Buzzer | Ligado" : "🔊 Buzzer | Desligado";
+    strcpy(region->buzzer_status_label, label);
+    add_event(label);
 }
 
 static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
@@ -314,11 +353,11 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     char class_region_B[16];
 
     // Região A
-    if (current_level_A >= ALERT_THRESHOLD_A)
+    if (region_A.current_level >= ALERT_THRESHOLD_A)
     {
         strcpy(class_region_A, "Alerta");
     }
-    else if (current_level_A >= ATTENTION_THRESHOLD_A)
+    else if (region_A.current_level >= ATTENTION_THRESHOLD_A)
     {
         strcpy(class_region_A, "Atenção");
     }
@@ -328,11 +367,11 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
     }
 
     // Região B
-    if (current_level_B >= ALERT_THRESHOLD_B)
+    if (region_B.current_level >= ALERT_THRESHOLD_B)
     {
         strcpy(class_region_B, "Alerta");
     }
-    else if (current_level_B >= ATTENTION_THRESHOLD_B)
+    else if (region_B.current_level >= ATTENTION_THRESHOLD_B)
     {
         strcpy(class_region_B, "Atenção");
     }
@@ -361,7 +400,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
         }
     }
 
-    char html[6144];
+    char html[7144];
 
     snprintf(html, sizeof(html),
              "HTTP/1.1 200 OK\r\n"
@@ -409,12 +448,20 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<h2>Região A</h2>"
              "<p class='value'>Nível: %dm</p>"
              "<p class='status %s'>%s</p>"
+             "<table style='text-align:left;'>"
+             "<tr><td>%s</td><tr>"
+             "<tr><td>%s</td><tr>"
+             "</table>"
              "</div>"
 
              "<div class='b bk'>"
              "<h2>Região B</h2>"
              "<p class='value'>Nível: %dm</p>"
              "<p class='status %s'>%s</p>"
+             "<table style='text-align:left;'>"
+             "<tr><td>%s</td><tr>"
+             "<tr><td>%s</td><tr>"
+             "</table>"
              "</div>"
 
              "<div class='b bk'>"
@@ -445,7 +492,15 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<div class='b'>"
              "<h2>Controle Manual</h2>"
              "<form method='GET' action='/'>"
-             "<label for='periferico'>Selecione:</label><br>"
+
+             "<label for='regiao'>Região:</label><br>"
+             "<select name='regiao'>"
+             "<option value=''>---</option>"
+             "<option value='A'>Região A</option>"
+             "<option value='B'>Região B</option>"
+             "</select><br><br>"
+
+             "<label for='periferico'>Periférico:</label><br>"
              "<select name='periferico'>"
              "<option value=''>---</option>"
              "<option value='buzzer'>Buzzer</option>"
@@ -453,6 +508,7 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "<option value='ledO'>LED - Atenção</option>"
              "<option value='ledR'>LED - Alerta</option>"
              "</select><br><br>"
+
              "<button class='tab-btn Normal' type='submit' name='acao' value='ligar'>Ligar</button>"
              "<button class='tab-btn Alerta' type='submit' name='acao' value='desligar'>Desligar</button>"
              "</form>"
@@ -468,14 +524,17 @@ static err_t tcp_server_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, er
              "new Chart(document.getElementById('nivelChartA').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região A (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
              "new Chart(document.getElementById('nivelChartB').getContext('2d'),{type:'line',data:{labels:['1','2','3','4','5','6','7','8','9','10'],datasets:[{label:'Região B (m)',data:%s,borderColor:'#1976d2',backgroundColor:'rgba(25,118,210,0.2)',fill:true,tension:0.3}]},options:{scales:{x:{type:'linear',position:'bottom',min:1,max:%d},y:{beginAtZero:true}}}});"
              "</script>"
-             
+
              "<script>(function(){setInterval(()=>{const controle=document.getElementById('controle');if(controle&&controle.classList.contains('hidden')){window.location.href='/';}},8000);})();</script>"
              "</body>"
              "</html>",
 
              // Variáveis para mostrar níveis atuais e classes:
-             current_level_A, class_region_A, class_region_A,
-             current_level_B, class_region_B, class_region_B,
+             region_A.current_level, class_region_A, class_region_A,
+             region_A.led_status_label, region_A.buzzer_status_label,
+             
+             region_B.current_level, class_region_B, class_region_B,
+             region_B.led_status_label, region_B.buzzer_status_label,
 
              // Limiares:
              ATTENTION_THRESHOLD_A, ALERT_THRESHOLD_A,

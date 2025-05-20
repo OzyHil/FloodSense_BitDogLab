@@ -2,10 +2,10 @@
 
 // Definições de cores utilizando níveis PWM para cada canal RGB
 const led_color DARK = {.red = 0, .green = 0, .blue = 0};       // Cor "apagado"
-const led_color GREEN = {.red = 0, .green = 72, .blue = 0};     // Verde
-const led_color ORANGE = {.red = 178, .green = 2, .blue = 0};  // Amarelo
-const led_color RED = {.red = 178, .green = 0, .blue = 0};      // Vermelho
-const led_color BLUE = {.red = 0, .green = 2, .blue = 52};      // Vermelho
+const led_color GREEN = {.red = 0, .green = 1, .blue = 0};     // Verde
+const led_color ORANGE = {.red = 2, .green = 1, .blue = 0};  // Amarelo
+const led_color RED = {.red = 1, .green = 0, .blue = 0};      // Vermelho
+const led_color BLUE = {.red = 0, .green = 0, .blue = 1};      // Vermelho
 
 // Inicializa os pinos dos LEDs RGB como PWM
 void configure_leds()

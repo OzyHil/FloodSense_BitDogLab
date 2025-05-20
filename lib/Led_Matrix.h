@@ -21,7 +21,7 @@ void configure_leds_matrix(); // Função para configurar a matriz de LEDs
 uint32_t rgb_matrix(led_color color);
 
 // Função para desenhar as cores do semáforo
-void update_matrix_from_level(uint8_t current_level, uint8_t attention_threshold, uint8_t alert_threshold);
+void update_matrix_from_level(uint8_t current_level, uint8_t alert_threshold);
 
 void init_digit_colors(); // Inicializa as cores dos dígitos
 
