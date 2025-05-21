@@ -11,8 +11,8 @@
 #include "ssd1306.h"    // Biblioteca para controle do display OLED
 
 // Credenciais WIFI - Tome cuidado se publicar no github!
-#define WIFI_SSID "TSUNAMI_EVERALDO"   // Nome da rede Wi-Fi
-#define WIFI_PASSWORD "amizade5560" // Senha da rede Wi-Fi
+#define WIFI_SSID ""   // Nome da rede Wi-Fi
+#define WIFI_PASSWORD "" // Senha da rede Wi-Fi
 
 #define ALERT_THRESHOLD_A 12
 #define ALERT_THRESHOLD_B 20
